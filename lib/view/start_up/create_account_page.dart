@@ -1,10 +1,21 @@
 import 'dart:io';
 
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_sns/utils/authentication.dart';
+import 'package:flutter_sns/utils/firestore/users.dart';
+import 'package:flutter_sns/utils/widget_utils.dart';
+import 'package:flutter_sns/view/start_up/check_email_page.dart';
 import 'package:image_picker/image_picker.dart';
 
+import '../../model/account.dart';
+import '../../utils/function_utils.dart';
+import '../screen.dart';
+
 class CreateAccountPage extends StatefulWidget {
-  const CreateAccountPage({Key? key}) : super(key: key);
+  final bool isSignInWithGoogle;
+  CreateAccountPage({this.isSignInWithGoogle = false});
 
   @override
   State<CreateAccountPage> createState() => _CreateAccountPageState();
@@ -17,30 +28,11 @@ class _CreateAccountPageState extends State<CreateAccountPage> {
   TextEditingController passController = TextEditingController();
   TextEditingController emailController = TextEditingController();
   File? image;
-  ImagePicker picker = ImagePicker();
-
-  Future<void> getImageFromGallery() async {
-    final pickedFile = await picker.pickImage(source: ImageSource.gallery);
-    if (pickedFile != null) {
-      setState(() {
-        image = File(pickedFile.path);
-      });
-    }
-  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        iconTheme: IconThemeData(color: Colors.black),
-        title: Text(
-          "新規登録",
-          style: TextStyle(color: Colors.black),
-        ),
-        centerTitle: true,
-      ),
+      appBar: WidgetUtils.createAppBar("新規登録"),
       body: SingleChildScrollView(
         child: Container(
           width: double.infinity,
@@ -48,8 +40,13 @@ class _CreateAccountPageState extends State<CreateAccountPage> {
             children: [
               SizedBox(height: 30),
               GestureDetector(
-                onTap: () {
-                  getImageFromGallery();
+                onTap: () async {
+                  var result = await FunctionUtils.getImageFromGallery();
+                  if (result != null) {
+                    setState(() {
+                      image = File(result.path);
+                    });
+                  }
                 },
                 child: CircleAvatar(
                   foregroundImage: image == null ? null : FileImage(image!),
@@ -81,33 +78,67 @@ class _CreateAccountPageState extends State<CreateAccountPage> {
                   decoration: InputDecoration(hintText: "自己紹介"),
                 ),
               ),
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 20.0),
-                child: Container(
-                  width: 300,
-                  child: TextField(
-                    controller: emailController,
-                    decoration: InputDecoration(hintText: "メールアドレス"),
-                  ),
-                ),
-              ),
-              Container(
-                width: 300,
-                child: TextField(
-                  controller: passController,
-                  decoration: InputDecoration(hintText: "パスワード"),
-                ),
-              ),
+              widget.isSignInWithGoogle
+                  ? Container()
+                  : Column(
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 20.0),
+                          child: Container(
+                            width: 300,
+                            child: TextField(
+                              controller: emailController,
+                              decoration: InputDecoration(hintText: "メールアドレス"),
+                            ),
+                          ),
+                        ),
+                        Container(
+                          width: 300,
+                          child: TextField(
+                            controller: passController,
+                            decoration: InputDecoration(hintText: "パスワード"),
+                          ),
+                        ),
+                      ],
+                    ),
               SizedBox(height: 50),
               ElevatedButton(
-                onPressed: () {
+                onPressed: () async {
                   if (nameController.text.isNotEmpty &&
                       userIdController.text.isNotEmpty &&
                       selfIntroductionController.text.isNotEmpty &&
-                      emailController.text.isNotEmpty &&
-                      passController.text.isNotEmpty &&
                       image != null) {
-                    Navigator.pop(context);
+                    if (widget.isSignInWithGoogle) {
+                      var _result = await createAccount(
+                          Authentication.currentFirebaseUser!.uid);
+                      if (_result == true) {
+                        await UserFirestore.getUser(
+                            Authentication.currentFirebaseUser!.uid);
+                        Navigator.pop(context);
+                        Navigator.pushReplacement(
+                          context,
+                          MaterialPageRoute(builder: (context) => Screen()),
+                        );
+                      }
+                    }
+                    var result = await Authentication.signUp(
+                      email: emailController.text,
+                      pass: passController.text,
+                    );
+                    if (result is UserCredential) {
+                      var _result = createAccount(result.user!.uid);
+                      if (_result == true) {
+                        result.user!.sendEmailVerification();
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => CheckEmailPage(
+                                email: emailController.text,
+                                pass: passController.text),
+                          ),
+                        );
+                      }
+                    }
                   }
                 },
                 child: Text("アカウントを作成"),
@@ -117,5 +148,18 @@ class _CreateAccountPageState extends State<CreateAccountPage> {
         ),
       ),
     );
+  }
+
+  Future<bool> createAccount(String uid) async {
+    String imagePath = await FunctionUtils.uploadImage(uid, image!);
+    Account newAccount = Account(
+      id: uid,
+      name: nameController.text,
+      userId: userIdController.text,
+      selfIntroduction: selfIntroductionController.text,
+      imagePath: imagePath,
+    );
+    var _result = await UserFirestore.setUser(newAccount);
+    return _result;
   }
 }
